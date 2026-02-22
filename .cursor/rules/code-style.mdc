@@ -1,0 +1,41 @@
+---
+description: Code style, security, logging, and dependency conventions
+alwaysApply: true
+---
+
+# Code Style
+
+- `const` over `let` — always
+- Early returns over deeply nested `if/else`
+- No magic strings or numbers — use enums or constants
+- No `any` type — use `unknown` and narrow, or define proper interfaces
+- Async/await everywhere — no raw Promises or callbacks
+- One class per file, file name matches class name in kebab-case
+- Imports ordered: NestJS > third-party > local
+- No barrel files (`index.ts`) except in `common/`
+- No commented-out code in production files
+
+## Security
+
+- Never expose internal DB IDs, password hashes, tokens in API responses
+- Hash passwords with bcrypt (cost factor 12)
+- `@UseGuards(JwtAuthGuard)` on protected routes
+- Role-based access via `@Roles()` decorator + `RolesGuard`
+- Rate limiting on auth endpoints (`@nestjs/throttler`)
+- Helmet middleware enabled
+- CORS configured explicitly — never `origin: '*'` in production
+
+## Logging
+
+- Use NestJS `Logger` — never `console.log`
+- Each service: `private readonly logger = new Logger(ServiceName.name)`
+- Log on create/update/delete operations
+- Never log sensitive data (passwords, tokens, PII)
+
+## Common Mistakes to Avoid
+
+- Returning raw Prisma models from controllers (leaks sensitive fields)
+- Business logic in controllers
+- `findMany()` without `take` limit
+- Silent error catching: `catch(e) {}`
+- Using `@Res()` (breaks interceptors and exception filters)

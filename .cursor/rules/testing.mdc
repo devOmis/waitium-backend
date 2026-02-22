@@ -1,0 +1,48 @@
+---
+description: Testing pyramid, Testcontainers setup, factories, and test conventions
+globs: "**/*.spec.ts,**/*.e2e-spec.ts,test/**/*.ts"
+alwaysApply: false
+---
+
+# Testing
+
+## Test Pyramid
+
+| Layer | Pattern | DB | Runner |
+|-------|---------|-----|--------|
+| Unit | `*.spec.ts` | Mocked | Parallel |
+| Integration | `*.integration.spec.ts` | Real (Testcontainers) | `--runInBand` |
+| E2E | `*.e2e-spec.ts` | Real (Testcontainers) | `--runInBand` |
+
+## Testcontainers
+
+- `test/setup/global-setup.ts` starts ONE `PostgreSqlContainer`, pushes schema, writes URL to `/tmp/.test-db-url`
+- `test/helpers/prisma-test.helper.ts` provides singleton PrismaClient with `clean()` (TRUNCATE all tables)
+
+## Factories
+
+```typescript
+class UserFactory {
+  build(overrides?)       // returns plain object (no DB)
+  create(overrides?)      // persists to DB
+  createMany(count, overrides?)
+}
+```
+
+Factories auto-create required relations (e.g., `PostFactory` creates a `User` unless `userId` is overridden).
+
+## Rules
+
+- Every `beforeEach` in integration/e2e calls `db.clean()`
+- Use factories for ALL test data — never hardcode objects inline
+- Descriptive names: `it('should throw ConflictException when email is already taken')`
+- Always test happy path AND error path for every service method
+- Assert the negative: `expect(result).not.toHaveProperty('password')`
+- Integration tests verify DB state directly after operations
+- E2E tests verify status codes, response body shape, field values, and absence of sensitive fields
+
+## Mocking (Unit Tests Only)
+
+- `createMockPrismaService()` returns `jest.fn()` for every method used
+- Never mock in integration or E2E tests
+- `jest.clearAllMocks()` in `afterEach`

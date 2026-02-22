@@ -1,0 +1,44 @@
+---
+description: NestJS layered architecture, module boundaries, and file structure conventions
+alwaysApply: true
+---
+
+# NestJS Architecture
+
+## Layered Architecture (strict separation)
+
+- **Controller**: HTTP only — request parsing, validation pipes, swagger decorators, status codes. No business logic. No direct Prisma calls.
+- **Service**: ALL business logic — validation rules, permission checks, error throwing, data transformation. Never imports Request/Response objects.
+- **Repository/Prisma**: Only layer that talks to the database. Complex queries get their own method, never inline.
+
+## Module Boundaries
+
+- Each domain has its own module (`UsersModule`, `OrdersModule`, etc.)
+- Modules communicate through exported services, NEVER by importing another module's repository or Prisma calls directly
+- Shared code lives in `src/common/` (DTOs, filters, interceptors, decorators, guards)
+- Config lives in `src/config/` using `@nestjs/config` with `registerAs`
+
+## File Structure Per Module
+
+```
+src/modules/<domain>/
+├── dto/
+│   ├── create-<domain>.dto.ts
+│   ├── update-<domain>.dto.ts
+│   ├── <domain>-response.dto.ts
+│   └── <domain>-query.dto.ts
+├── entities/ or interfaces/
+├── enums/
+├── guards/
+├── __tests__/
+│   ├── <domain>.service.spec.ts
+│   ├── <domain>.service.integration.spec.ts
+│   └── <domain>.controller.spec.ts
+├── <domain>.controller.ts
+├── <domain>.service.ts
+└── <domain>.module.ts
+```
+
+## Code Generation
+
+When adding a new module, generate: module, controller, service, DTOs, entity/interface, enums, tests, factory. Always generate complete files — never truncate or use placeholders.

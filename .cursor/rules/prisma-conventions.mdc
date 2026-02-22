@@ -1,0 +1,43 @@
+---
+description: Prisma schema conventions, query patterns, and PrismaService setup
+globs: "**/*.prisma,src/**/*.ts"
+alwaysApply: false
+---
+
+# Prisma Conventions
+
+## Schema
+
+### Naming
+
+- Model names: PascalCase (`User`, `OrderItem`) — Prisma default, no `@@map` needed
+- Column names: camelCase (`firstName`, `createdAt`) — Prisma default, no `@map` needed
+- Exception: OAuth/external-spec fields stay snake_case as-is (`refresh_token`, `access_token`, `id_token`)
+
+### Primary Keys
+
+- Use `Int @id @default(autoincrement())` on every model
+- Add a `hashId String @unique` column for public-facing IDs
+- Generate hashId in the service layer using `sqids` after creation
+- API routes and responses use `hashId` only — never expose the integer ID
+
+### Standard Fields
+
+- Always add `createdAt`, `updatedAt`, `deletedAt` (soft delete) to every model
+- Add `@@index` for any column used in WHERE or ORDER BY
+- Every relation must have explicit `onDelete` behavior (`Cascade`, `SetNull`, `Restrict`)
+
+## Query Patterns
+
+- Use `$transaction` for multi-table writes
+- Soft delete: `findFirst` + `where: { deletedAt: null }` (or use middleware)
+- Pagination always returns `{ data, meta: { total, page, limit, totalPages, hasNextPage, hasPreviousPage } }`
+- Never use `findMany` without `take` — unbounded queries are a production incident
+- Use `select` or response DTOs to avoid leaking sensitive fields (passwords, tokens, integer IDs)
+
+## PrismaService
+
+- Wrap `PrismaClient` in a NestJS service (`PrismaService extends PrismaClient`)
+- Register in a `@Global()` `PrismaModule`
+- Implement `onModuleInit` (connect) and `onModuleDestroy` (disconnect)
+- Enable query logging in development only

@@ -1,0 +1,30 @@
+---
+description: API design, DTOs, validation, error handling, and Swagger conventions
+globs: "src/**/*.controller.ts,src/**/*.dto.ts"
+alwaysApply: false
+---
+
+# API Design
+
+- Global prefix: `/api`, URI-based versioning (`/api/v1/users`)
+- Proper status codes: POST 201, GET 200, PUT/PATCH 200, DELETE 204
+- Every controller has full Swagger: `@ApiTags`, `@ApiOperation`, `@ApiResponse`, `@ApiParam`, `@ApiBearerAuth`
+- Use `ParseUUIDPipe` on all `:id` route params
+- `TransformInterceptor` wraps responses in `{ success: true, data, timestamp }`
+
+## DTOs & Validation
+
+- Every endpoint has dedicated request AND response DTOs — never pass raw Prisma types
+- Use `class-validator` decorators on every field: `@IsString()`, `@IsEmail()`, `@MaxLength()`, etc.
+- Use `@Exclude()` and `@Expose()` on response DTOs to control serialization
+- `UpdateDto extends PartialType(OmitType(CreateDto, ['password']))` — never duplicate definitions
+- Shared pagination DTO in `src/common/dto/pagination-query.dto.ts`
+- `whitelist: true` and `forbidNonWhitelisted: true` in global `ValidationPipe`
+
+## Error Handling
+
+- Use NestJS exceptions: `NotFoundException`, `ConflictException`, `BadRequestException`, `ForbiddenException`
+- NEVER throw generic `Error` or `HttpException` with magic status codes
+- Business logic errors thrown in service layer, NEVER in controllers
+- DB constraint violations (unique, FK) caught and re-thrown as `ConflictException`/`BadRequestException`
+- Log 5xx as `logger.error` with stack trace, 4xx as `logger.warn`
