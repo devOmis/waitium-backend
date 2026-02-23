@@ -3,7 +3,6 @@ import {
   ConflictException,
   BadRequestException,
   UnauthorizedException,
-  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -17,7 +16,6 @@ import { MailService } from '../../mail/mail.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -47,6 +45,23 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
   ) {}
+
+  private async generateTokens(userId: string, email: string) {
+    const payload = { sub: userId, email };
+
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwt.signAsync(payload, {
+        secret: this.config.getOrThrow<string>('JWT_SECRET'),
+        expiresIn: '15m',
+      }),
+      this.jwt.signAsync(payload, {
+        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        expiresIn: '7d',
+      }),
+    ]);
+
+    return { accessToken, refreshToken };
+  }
 
   async register(dto: RegisterDto) {
     const existing = await this.prisma.user.findUnique({
@@ -108,27 +123,26 @@ export class AuthService {
       );
     }
 
+    const tokens = await this.generateTokens(user.id, user.email);
+
     this.logger.log(`User registered: ${user.id}`);
 
-    return { id: user.id, email: user.email, message: 'Verification email sent' };
+    return {
+      id: user.id,
+      email: user.email,
+      ...tokens,
+      message: 'Verification email sent',
+    };
   }
 
-  async verifyEmail(dto: VerifyEmailDto) {
+  async verifyEmail(userId: string, dto: VerifyEmailDto) {
     if (!dto.code && !dto.token) {
       throw new BadRequestException('Either code or token must be provided');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    if (!user) {
-      throw new BadRequestException('Invalid verification request');
-    }
-
     const whereClause = dto.token
-      ? { token: dto.token, type: TOKEN_TYPE.EMAIL_VERIFICATION, userId: user.id, usedAt: null }
-      : { code: dto.code, type: TOKEN_TYPE.EMAIL_VERIFICATION, userId: user.id, usedAt: null };
+      ? { token: dto.token, type: TOKEN_TYPE.EMAIL_VERIFICATION, userId, usedAt: null }
+      : { code: dto.code, type: TOKEN_TYPE.EMAIL_VERIFICATION, userId, usedAt: null };
 
     const verification = await this.prisma.verificationToken.findFirst({
       where: whereClause,
@@ -149,22 +163,22 @@ export class AuthService {
     });
 
     await this.prisma.user.update({
-      where: { id: user.id },
+      where: { id: userId },
       data: { emailVerified: new Date() },
     });
 
-    this.logger.log(`Email verified: ${user.id}`);
+    this.logger.log(`Email verified: ${userId}`);
 
     return { message: 'Email verified successfully' };
   }
 
-  async resendVerification(dto: ResendVerificationDto) {
+  async resendVerification(userId: string) {
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { id: userId },
     });
 
     if (!user) {
-      return { message: 'If the email exists, a verification code has been sent' };
+      throw new BadRequestException('User not found');
     }
 
     if (user.emailVerified) {
@@ -242,25 +256,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (!user.emailVerified) {
-      throw new ForbiddenException('Email not verified');
-    }
-
-    const payload = { sub: user.id, email: user.email };
-
-    const accessToken = await this.jwt.signAsync(payload, {
-      secret: this.config.getOrThrow<string>('JWT_SECRET'),
-      expiresIn: '15m',
-    });
-
-    const refreshToken = await this.jwt.signAsync(payload, {
-      secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
-      expiresIn: '7d',
-    });
+    const tokens = await this.generateTokens(user.id, user.email);
 
     this.logger.log(`User logged in: ${user.id}`);
 
-    return { accessToken, refreshToken };
+    return { ...tokens, emailVerified: user.emailVerified };
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {
@@ -390,19 +390,7 @@ export class AuthService {
         throw new UnauthorizedException('Invalid refresh token');
       }
 
-      const newPayload = { sub: user.id, email: user.email };
-
-      const accessToken = await this.jwt.signAsync(newPayload, {
-        secret: this.config.getOrThrow<string>('JWT_SECRET'),
-        expiresIn: '15m',
-      });
-
-      const refreshToken = await this.jwt.signAsync(newPayload, {
-        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
-        expiresIn: '7d',
-      });
-
-      return { accessToken, refreshToken };
+      return this.generateTokens(user.id, user.email);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }

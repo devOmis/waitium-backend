@@ -19,7 +19,7 @@ describe('AppController', () => {
       expect(appController.getHome()).toEqual({
         message: 'Waitium API',
         version: '1.0.0',
-        timestamp: new Date().toISOString(),
+        timestamp: expect.any(String),
       });
     });
   });

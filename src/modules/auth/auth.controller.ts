@@ -12,12 +12,12 @@ import {
   ApiResponse,
   ApiCreatedResponse,
   ApiOkResponse,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -26,13 +26,20 @@ import {
   AuthTokensResponse,
   MessageResponse,
 } from './dto/auth-response.dto';
+import { Public } from '../../common/decorators/public.decorator';
+import {
+  CurrentUser,
+  JwtUser,
+} from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Auth')
+@ApiBearerAuth()
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
+  @Public()
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register a new user' })
@@ -43,6 +50,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Public()
   @Version('1')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with email and password' })
@@ -58,8 +66,12 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify email with 6-digit code or token link' })
   @ApiOkResponse({ type: MessageResponse })
-  async verifyEmail(@Body() dto: VerifyEmailDto): Promise<MessageResponse> {
-    return this.authService.verifyEmail(dto);
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async verifyEmail(
+    @CurrentUser() user: JwtUser,
+    @Body() dto: VerifyEmailDto,
+  ): Promise<MessageResponse> {
+    return this.authService.verifyEmail(user.userId, dto);
   }
 
   @Post('resend-verification')
@@ -67,13 +79,15 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend email verification code' })
   @ApiOkResponse({ type: MessageResponse })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   async resendVerification(
-    @Body() dto: ResendVerificationDto,
+    @CurrentUser() user: JwtUser,
   ): Promise<MessageResponse> {
-    return this.authService.resendVerification(dto);
+    return this.authService.resendVerification(user.userId);
   }
 
   @Post('forgot-password')
+  @Public()
   @Version('1')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request a password reset code' })
@@ -85,25 +99,23 @@ export class AuthController {
   }
 
   @Post('reset-password')
+  @Public()
   @Version('1')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with code from email' })
   @ApiOkResponse({ type: MessageResponse })
-  async resetPassword(
-    @Body() dto: ResetPasswordDto,
-  ): Promise<MessageResponse> {
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<MessageResponse> {
     return this.authService.resetPassword(dto);
   }
 
   @Post('refresh')
+  @Public()
   @Version('1')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiOkResponse({ type: AuthTokensResponse })
   @ApiResponse({ status: 401, description: 'Invalid refresh token' })
-  async refresh(
-    @Body() dto: RefreshTokenDto,
-  ): Promise<AuthTokensResponse> {
+  async refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokensResponse> {
     return this.authService.refreshToken(dto);
   }
 }

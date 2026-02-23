@@ -16,6 +16,12 @@ export class RegisterResponse {
   email: string;
 
   @ApiProperty()
+  accessToken: string;
+
+  @ApiProperty()
+  refreshToken: string;
+
+  @ApiProperty()
   message: string;
 }
 

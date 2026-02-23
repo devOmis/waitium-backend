@@ -67,12 +67,15 @@ describe('Auth (E2E)', () => {
     await db.disconnect();
   });
 
+  function registerUser(email: string, password = 'StrongPass1') {
+    return request(app.getHttpServer())
+      .post('/api/v1/auth/register')
+      .send({ email, password });
+  }
+
   describe('POST /api/v1/auth/register', () => {
-    it('should return 201 with correct response shape', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/auth/register')
-        .send({ email: 'new@example.com', password: 'StrongPass1' })
-        .expect(201);
+    it('should return 201 with tokens and correct response shape', async () => {
+      const res = await registerUser('new@example.com').expect(201);
 
       expect(res.body).toEqual(
         expect.objectContaining({
@@ -80,11 +83,15 @@ describe('Auth (E2E)', () => {
           data: expect.objectContaining({
             id: expect.any(String),
             email: 'new@example.com',
+            accessToken: expect.any(String),
+            refreshToken: expect.any(String),
             message: expect.any(String),
           }),
           timestamp: expect.any(String),
         }),
       );
+      expect(res.body.data.accessToken.split('.')).toHaveLength(3);
+      expect(res.body.data.refreshToken.split('.')).toHaveLength(3);
       expect(res.body.data).not.toHaveProperty('password');
     });
 
@@ -170,28 +177,36 @@ describe('Auth (E2E)', () => {
         .expect(401);
     });
 
-    it('should return 403 for unverified user', async () => {
+    it('should return tokens with emailVerified null for unverified user', async () => {
       const hashed = await bcrypt.hash('StrongPass1', 12);
       await userFactory.create({
         email: 'unverified@test.com',
         password: hashed,
       });
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
         .send({ email: 'unverified@test.com', password: 'StrongPass1' })
-        .expect(403);
+        .expect(200);
+
+      expect(res.body.data.emailVerified).toBeNull();
+      expect(res.body.data.accessToken).toBeDefined();
     });
   });
 
   describe('POST /api/v1/auth/verify-email', () => {
-    it('should return 200 for valid code', async () => {
-      const user = await userFactory.create({ email: 'vcode@test.com' });
-      await tokenFactory.create({ userId: user.id, code: '123456' });
+    it('should return 200 for valid code with auth token', async () => {
+      const regRes = await registerUser('vcode@test.com').expect(201);
+      const accessToken = regRes.body.data.accessToken;
+
+      const vTokens = await prisma.verificationToken.findMany({
+        where: { userId: regRes.body.data.id },
+      });
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/auth/verify-email')
-        .send({ email: 'vcode@test.com', code: '123456' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ code: vTokens[0].code })
         .expect(200);
 
       expect(res.body.data).toEqual(
@@ -199,13 +214,21 @@ describe('Auth (E2E)', () => {
       );
     });
 
+    it('should return 401 without auth token', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/verify-email')
+        .send({ code: '123456' })
+        .expect(401);
+    });
+
     it('should return 400 for invalid code', async () => {
-      const user = await userFactory.create({ email: 'badcode@test.com' });
-      await tokenFactory.create({ userId: user.id, code: '123456' });
+      const regRes = await registerUser('badcode@test.com').expect(201);
+      const accessToken = regRes.body.data.accessToken;
 
       await request(app.getHttpServer())
         .post('/api/v1/auth/verify-email')
-        .send({ email: 'badcode@test.com', code: '999999' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ code: '999999' })
         .expect(400);
     });
 
@@ -213,20 +236,27 @@ describe('Auth (E2E)', () => {
       const user = await userFactory.create({ email: 'expcode@test.com' });
       await tokenFactory.createExpired({ userId: user.id, code: '111111' });
 
+      const regRes = await registerUser('expcode-reg@test.com').expect(201);
+      const accessToken = regRes.body.data.accessToken;
+
       await request(app.getHttpServer())
         .post('/api/v1/auth/verify-email')
-        .send({ email: 'expcode@test.com', code: '111111' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ code: '111111' })
         .expect(400);
     });
   });
 
   describe('POST /api/v1/auth/resend-verification', () => {
-    it('should return 200 and resend email', async () => {
-      await userFactory.create({ email: 'resend@test.com' });
+    it('should return 200 and resend email with auth token', async () => {
+      const regRes = await registerUser('resend@test.com').expect(201);
+      const accessToken = regRes.body.data.accessToken;
+      mailSend.mockClear();
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/auth/resend-verification')
-        .send({ email: 'resend@test.com' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send()
         .expect(200);
 
       expect(res.body.data).toEqual(
@@ -235,12 +265,30 @@ describe('Auth (E2E)', () => {
       expect(mailSend).toHaveBeenCalled();
     });
 
+    it('should return 401 without auth token', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/resend-verification')
+        .send()
+        .expect(401);
+    });
+
     it('should return 400 if already verified', async () => {
-      await userFactory.createVerified({ email: 'alreadyv@test.com' });
+      const regRes = await registerUser('alreadyv@test.com').expect(201);
+      const accessToken = regRes.body.data.accessToken;
+
+      const vTokens = await prisma.verificationToken.findMany({
+        where: { userId: regRes.body.data.id },
+      });
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/verify-email')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ code: vTokens[0].code })
+        .expect(200);
 
       await request(app.getHttpServer())
         .post('/api/v1/auth/resend-verification')
-        .send({ email: 'alreadyv@test.com' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send()
         .expect(400);
     });
   });

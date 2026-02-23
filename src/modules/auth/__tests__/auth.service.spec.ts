@@ -100,12 +100,19 @@ describe('AuthService', () => {
   describe('register', () => {
     const dto = { email: 'test@example.com', password: 'StrongPass1' };
 
-    it('should hash the password with bcrypt cost 12', async () => {
+    function setupRegisterMocks() {
       prisma.user.findUnique.mockResolvedValue(null);
       prisma.user.create.mockResolvedValue({ id: 'user-1', email: dto.email, password: 'hashed' });
-      prisma.verificationToken.create.mockResolvedValue({ id: 'token-1', code: '123456' });
+      prisma.verificationToken.create.mockResolvedValue({ id: 'token-1', code: '123456', token: 'uuid-token' });
       mockBcrypt.hash.mockResolvedValue('hashed' as never);
       mail.send.mockResolvedValue(undefined);
+      jwt.signAsync
+        .mockResolvedValueOnce('access-token')
+        .mockResolvedValueOnce('refresh-token');
+    }
+
+    it('should hash the password with bcrypt cost 12', async () => {
+      setupRegisterMocks();
 
       await service.register(dto);
 
@@ -113,11 +120,7 @@ describe('AuthService', () => {
     });
 
     it('should create user and verification token', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      prisma.user.create.mockResolvedValue({ id: 'user-1', email: dto.email, password: 'hashed' });
-      prisma.verificationToken.create.mockResolvedValue({ id: 'token-1', code: '123456', token: 'uuid-token' });
-      mockBcrypt.hash.mockResolvedValue('hashed' as never);
-      mail.send.mockResolvedValue(undefined);
+      setupRegisterMocks();
 
       await service.register(dto);
 
@@ -136,11 +139,7 @@ describe('AuthService', () => {
     });
 
     it('should send verification email', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      prisma.user.create.mockResolvedValue({ id: 'user-1', email: dto.email, password: 'hashed' });
-      prisma.verificationToken.create.mockResolvedValue({ id: 'token-1', code: '123456', token: 'uuid-token' });
-      mockBcrypt.hash.mockResolvedValue('hashed' as never);
-      mail.send.mockResolvedValue(undefined);
+      setupRegisterMocks();
 
       await service.register(dto);
 
@@ -152,6 +151,17 @@ describe('AuthService', () => {
       );
     });
 
+    it('should return accessToken and refreshToken', async () => {
+      setupRegisterMocks();
+
+      const result = await service.register(dto);
+
+      expect(result.accessToken).toBe('access-token');
+      expect(result.refreshToken).toBe('refresh-token');
+      expect(result.id).toBe('user-1');
+      expect(result.email).toBe(dto.email);
+    });
+
     it('should throw ConflictException for duplicate email', async () => {
       prisma.user.findUnique.mockResolvedValue({ id: 'existing', email: dto.email });
 
@@ -159,11 +169,7 @@ describe('AuthService', () => {
     });
 
     it('should never return password in response', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      prisma.user.create.mockResolvedValue({ id: 'user-1', email: dto.email, password: 'hashed' });
-      prisma.verificationToken.create.mockResolvedValue({ id: 'token-1', code: '123456', token: 'uuid-token' });
-      mockBcrypt.hash.mockResolvedValue('hashed' as never);
-      mail.send.mockResolvedValue(undefined);
+      setupRegisterMocks();
 
       const result = await service.register(dto);
 
@@ -182,14 +188,17 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         usedAt: null,
       };
-      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: null });
       prisma.verificationToken.findFirst.mockResolvedValue(token);
       prisma.verificationToken.update.mockResolvedValue({ ...token, usedAt: new Date() });
       prisma.user.update.mockResolvedValue({ id: 'user-1', emailVerified: new Date() });
 
-      const result = await service.verifyEmail({ email: 'test@example.com', code: '123456' });
+      const result = await service.verifyEmail('user-1', { code: '123456' });
 
       expect(result).toEqual(expect.objectContaining({ message: expect.any(String) }));
+      expect(prisma.verificationToken.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({ userId: 'user-1', code: '123456' }),
+        orderBy: { createdAt: 'desc' },
+      });
     });
 
     it('should verify with valid token link', async () => {
@@ -202,14 +211,17 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         usedAt: null,
       };
-      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: null });
       prisma.verificationToken.findFirst.mockResolvedValue(token);
       prisma.verificationToken.update.mockResolvedValue({ ...token, usedAt: new Date() });
       prisma.user.update.mockResolvedValue({ id: 'user-1', emailVerified: new Date() });
 
-      const result = await service.verifyEmail({ email: 'test@example.com', token: 'uuid-token' });
+      const result = await service.verifyEmail('user-1', { token: 'uuid-token' });
 
       expect(result).toEqual(expect.objectContaining({ message: expect.any(String) }));
+      expect(prisma.verificationToken.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({ userId: 'user-1', token: 'uuid-token' }),
+        orderBy: { createdAt: 'desc' },
+      });
     });
 
     it('should throw BadRequestException for expired code', async () => {
@@ -222,28 +234,24 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() - 60 * 1000),
         usedAt: null,
       };
-      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: null });
       prisma.verificationToken.findFirst.mockResolvedValue(token);
 
       await expect(
-        service.verifyEmail({ email: 'test@example.com', code: '123456' }),
+        service.verifyEmail('user-1', { code: '123456' }),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException for already-used code', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: null });
       prisma.verificationToken.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.verifyEmail({ email: 'test@example.com', code: '999999' }),
+        service.verifyEmail('user-1', { code: '999999' }),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException when neither code nor token provided', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: null });
-
       await expect(
-        service.verifyEmail({ email: 'test@example.com' }),
+        service.verifyEmail('user-1', {}),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -255,7 +263,7 @@ describe('AuthService', () => {
       prisma.verificationToken.create.mockResolvedValue({ id: 'token-2', code: '654321', token: 'new-uuid' });
       mail.send.mockResolvedValue(undefined);
 
-      await service.resendVerification({ email: 'test@example.com' });
+      await service.resendVerification('user-1');
 
       expect(prisma.verificationToken.create).toHaveBeenCalled();
       expect(mail.send).toHaveBeenCalledWith(
@@ -267,7 +275,15 @@ describe('AuthService', () => {
       prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'test@example.com', emailVerified: new Date() });
 
       await expect(
-        service.resendVerification({ email: 'test@example.com' }),
+        service.resendVerification('user-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException if user not found', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resendVerification('nonexistent'),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -317,7 +333,7 @@ describe('AuthService', () => {
       await expect(service.login(dto)).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should throw ForbiddenException for unverified user', async () => {
+    it('unverified user', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 'user-1',
         email: dto.email,
@@ -327,7 +343,8 @@ describe('AuthService', () => {
       });
       mockBcrypt.compare.mockResolvedValue(true as never);
 
-      await expect(service.login(dto)).rejects.toThrow(ForbiddenException);
+      const result = await service.login(dto);
+      expect(result.emailVerified).toBeNull();
     });
   });
 

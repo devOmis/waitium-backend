@@ -5,7 +5,6 @@ import {
   ConflictException,
   BadRequestException,
   UnauthorizedException,
-  ForbiddenException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
@@ -76,7 +75,7 @@ describe('AuthService (Integration)', () => {
   });
 
   describe('register', () => {
-    it('should persist user with hashed password', async () => {
+    it('should persist user with hashed password and return tokens', async () => {
       const result = await service.register({
         email: 'new@example.com',
         password: 'StrongPass1',
@@ -91,6 +90,10 @@ describe('AuthService (Integration)', () => {
       const isHashed = await bcrypt.compare('StrongPass1', user!.password!);
       expect(isHashed).toBe(true);
       expect(result).not.toHaveProperty('password');
+      expect(result.accessToken).toBeDefined();
+      expect(result.refreshToken).toBeDefined();
+      expect(result.accessToken.split('.')).toHaveLength(3);
+      expect(result.refreshToken.split('.')).toHaveLength(3);
     });
 
     it('should create a verification token with correct expiry', async () => {
@@ -130,7 +133,7 @@ describe('AuthService (Integration)', () => {
         type: TOKEN_TYPE.EMAIL_VERIFICATION,
       });
 
-      await service.verifyEmail({ email: 'unverified@test.com', code: '123456' });
+      await service.verifyEmail(user.id, { code: '123456' });
 
       const updated = await prisma.user.findUnique({ where: { id: user.id } });
       expect(updated!.emailVerified).not.toBeNull();
@@ -145,7 +148,7 @@ describe('AuthService (Integration)', () => {
       const user = await userFactory.create({ email: 'link@test.com' });
       const vToken = await tokenFactory.create({ userId: user.id });
 
-      await service.verifyEmail({ email: 'link@test.com', token: vToken.token });
+      await service.verifyEmail(user.id, { token: vToken.token });
 
       const updated = await prisma.user.findUnique({ where: { id: user.id } });
       expect(updated!.emailVerified).not.toBeNull();
@@ -156,7 +159,7 @@ describe('AuthService (Integration)', () => {
       await tokenFactory.createExpired({ userId: user.id, code: '111111' });
 
       await expect(
-        service.verifyEmail({ email: 'expired@test.com', code: '111111' }),
+        service.verifyEmail(user.id, { code: '111111' }),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -166,7 +169,7 @@ describe('AuthService (Integration)', () => {
       const user = await userFactory.create({ email: 'resend@test.com' });
       const oldToken = await tokenFactory.create({ userId: user.id });
 
-      await service.resendVerification({ email: 'resend@test.com' });
+      await service.resendVerification(user.id);
 
       const invalidated = await prisma.verificationToken.findUnique({
         where: { id: oldToken.id },
@@ -181,10 +184,10 @@ describe('AuthService (Integration)', () => {
     });
 
     it('should reject if already verified', async () => {
-      await userFactory.createVerified({ email: 'verified@test.com' });
+      const user = await userFactory.createVerified({ email: 'verified@test.com' });
 
       await expect(
-        service.resendVerification({ email: 'verified@test.com' }),
+        service.resendVerification(user.id),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -221,16 +224,15 @@ describe('AuthService (Integration)', () => {
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should reject unverified user', async () => {
+    it('should return emailVerified as null for unverified user', async () => {
       const hashed = await bcrypt.hash('StrongPass1', 12);
       await userFactory.create({
         email: 'noverify@test.com',
         password: hashed,
       });
 
-      await expect(
-        service.login({ email: 'noverify@test.com', password: 'StrongPass1' }),
-      ).rejects.toThrow(ForbiddenException);
+      const result = await service.login({ email: 'noverify@test.com', password: 'StrongPass1' });
+      expect(result.emailVerified).toBeNull();
     });
   });
 
